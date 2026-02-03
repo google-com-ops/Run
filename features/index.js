@@ -1,12 +1,22 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
+const express = require('express');
 require('dotenv').config();
 
 // Token bot
-const BOT_TOKEN = process.env.BOT_TOKEN || '8142102625:AAEhrVvNa7tKKm39d9Ry_7v-nD6NN2lvPNI';
-const bot = new Telegraf(BOT_TOKEN);
+const BOT_TOKEN = process.env.BOT_TOKEN;
+if (!BOT_TOKEN) {
+    console.error('❌ BOT_TOKEN is required!');
+    process.exit(1);
+}
 
-// Server list dengan konfigurasi lebih baik
+const bot = new Telegraf(BOT_TOKEN);
+const app = express();
+
+// Middleware
+app.use(express.json());
+
+// Server list LENGKAP 20 negara
 const SERVERS = [
     { code: 'us', country: 'USA', emoji: '🇺🇸', city: 'New York', timeout: 3000 },
     { code: 'gb', country: 'UK', emoji: '🇬🇧', city: 'London', timeout: 3000 },
@@ -45,27 +55,21 @@ function escapeHtml(text) {
 function formatUrl(url) {
     if (!url) return 'http://invalid.url';
     url = url.trim().toLowerCase();
-    
-    // Remove protocol jika ada
     url = url.replace(/^https?:\/\//i, '');
-    
-    // Remove www jika ada
     url = url.replace(/^www\./i, '');
-    
-    // Tambahkan http://
     return 'http://' + url;
 }
 
-// Fungsi untuk detect redirect
+// Fungsi check server LENGKAP dengan semua error detection
 async function checkServer(url, server) {
     const start = Date.now();
     
     try {
         const response = await axios({
-            method: 'HEAD', // Gunakan HEAD untuk lebih cepat
+            method: 'HEAD',
             url: url,
             timeout: server.timeout || 3000,
-            maxRedirects: 5,
+            maxRedirects: 10,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': '*/*',
@@ -99,7 +103,8 @@ async function checkServer(url, server) {
             status: response.statusText || 'OK',
             isRedirect: isRedirect,
             redirectCount: redirectCount,
-            finalUrl: finalUrl
+            finalUrl: finalUrl,
+            headers: response.headers
         };
         
     } catch (error) {
@@ -107,7 +112,7 @@ async function checkServer(url, server) {
         let statusCode = 0;
         let statusText = 'Unknown Error';
         
-        // Deteksi error yang lebih spesifik
+        // Deteksi semua jenis error LENGKAP
         if (error.code === 'ECONNABORTED') {
             statusCode = 599;
             statusText = 'Timeout';
@@ -129,6 +134,21 @@ async function checkServer(url, server) {
         } else if (error.code === 'CERT_HAS_EXPIRED') {
             statusCode = 526;
             statusText = 'SSL Expired';
+        } else if (error.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+            statusCode = 525;
+            statusText = 'SSL Handshake Failed';
+        } else if (error.code === 'EHOSTUNREACH') {
+            statusCode = 503;
+            statusText = 'Host Unreachable';
+        } else if (error.code === 'ENETUNREACH') {
+            statusCode = 503;
+            statusText = 'Network Unreachable';
+        } else if (error.code === 'EADDRNOTAVAIL') {
+            statusCode = 503;
+            statusText = 'Address Not Available';
+        } else if (error.code === 'ECONNRESET') {
+            statusCode = 502;
+            statusText = 'Connection Reset By Peer';
         } else if (error.response) {
             statusCode = error.response.status;
             statusText = 'Server Error';
@@ -152,7 +172,7 @@ async function checkServer(url, server) {
     }
 }
 
-// Get status message dengan lebih detail
+// Get status message dengan semua kode HTTP
 function getStatusMsg(code, isRedirect = false) {
     if (isRedirect) return 'Redirected';
     if (code === 0) return 'Connection Failed';
@@ -161,46 +181,70 @@ function getStatusMsg(code, isRedirect = false) {
     if (code === 503) return 'Service Unavailable';
     if (code === 504) return 'Gateway Timeout';
     if (code === 508) return 'Broken Pipe';
-    if (code === 301 || code === 302) return 'Redirect';
-    if (code === 404) return 'Not Found';
+    if (code === 525) return 'SSL Handshake Failed';
+    if (code === 526) return 'SSL Expired';
+    
+    // Kode redirect
+    if (code === 301) return 'Permanent Redirect';
+    if (code === 302) return 'Temporary Redirect';
+    if (code === 303) return 'See Other';
+    if (code === 307) return 'Temporary Redirect';
+    if (code === 308) return 'Permanent Redirect';
+    
+    // Kode client error
+    if (code === 400) return 'Bad Request';
+    if (code === 401) return 'Unauthorized';
     if (code === 403) return 'Forbidden';
+    if (code === 404) return 'Not Found';
+    if (code === 405) return 'Method Not Allowed';
+    if (code === 408) return 'Request Timeout';
     if (code === 429) return 'Too Many Requests';
+    if (code === 451) return 'Unavailable For Legal Reasons';
+    
+    // Kode server error
     if (code === 500) return 'Internal Server Error';
-    if (code === 200) return 'OK';
+    if (code === 501) return 'Not Implemented';
+    if (code === 502) return 'Bad Gateway';
+    if (code === 503) return 'Service Unavailable';
+    if (code === 504) return 'Gateway Timeout';
+    if (code === 505) return 'HTTP Version Not Supported';
+    if (code === 511) return 'Network Authentication Required';
+    
+    // Group based on ranges
+    if (code >= 100 && code < 200) return 'Informational';
     if (code >= 200 && code < 300) return 'Success';
     if (code >= 300 && code < 400) return 'Redirect';
     if (code >= 400 && code < 500) return 'Client Error';
     if (code >= 500 && code < 600) return 'Server Error';
-    return 'Unknown';
+    
+    return 'Unknown Status';
 }
 
-// Format hasil dengan lebih baik
+// Format hasil dengan detail lengkap
 function formatResultsHTML(data) {
     const { url, results } = data;
     
-    let message = `<b>🌐 HTTP-Check Results</b>\n`;
+    let message = `<b>🌐 HTTP Check Results</b>\n`;
     message += `<code>${escapeHtml(url)}</code>\n\n`;
     
-    // Kelompokkan hasil berdasarkan status
+    // Kelompokkan hasil
     const success = results.filter(r => r.code >= 200 && r.code < 300).length;
     const redirects = results.filter(r => r.code >= 300 && r.code < 400).length;
     const clientErrors = results.filter(r => r.code >= 400 && r.code < 500).length;
     const serverErrors = results.filter(r => r.code >= 500 || r.code === 0 || r.code === 599 || r.code === 508).length;
     
-    // Show top results (yang paling cepat dan error)
+    // Show top 10 results
     const sortedResults = [...results].sort((a, b) => {
         if (a.success && !b.success) return -1;
         if (!a.success && b.success) return 1;
         return a.time - b.time;
     });
     
-    // Tampilkan 10 hasil terbaik/terburuk
     const displayResults = sortedResults.slice(0, 10);
     
     message += `<b>📊 Quick Overview:</b>\n`;
     displayResults.forEach(result => {
         const { server, code, time, isRedirect } = result;
-        const statusMsg = getStatusMsg(code, isRedirect);
         
         // Icon berdasarkan status
         let icon = '❓';
@@ -209,11 +253,13 @@ function formatResultsHTML(data) {
         else if (code >= 400 && code < 500) icon = '⚠️';
         else if (code >= 500 || code === 0 || code === 599 || code === 508) icon = '❌';
         
-        // Warna code
+        // Format code
         let codeDisplay = code.toString();
         if (code === 0) codeDisplay = 'ERR';
         if (code === 599) codeDisplay = 'TO';
         if (code === 508) codeDisplay = 'BP';
+        if (code === 525) codeDisplay = 'SSL';
+        if (code === 526) codeDisplay = 'SSL-E';
         
         message += `${icon} ${server.emoji} <b>${server.city}</b> » ${codeDisplay} - ${time}ms\n`;
     });
@@ -226,21 +272,31 @@ function formatResultsHTML(data) {
     message += `❌ Server Errors: <b>${serverErrors}</b>\n`;
     message += `🌍 Total: <b>${results.length}</b> servers\n`;
     
-    // Error details jika ada
-    const criticalErrors = results.filter(r => r.code === 0 || r.code === 599 || r.code === 508);
+    // Error details
+    const criticalErrors = results.filter(r => 
+        r.code === 0 || r.code === 599 || r.code === 508 || 
+        r.code === 525 || r.code === 526 || r.code >= 500
+    );
+    
     if (criticalErrors.length > 0) {
-        message += `\n<b>🚨 Critical Errors:</b>\n`;
-        criticalErrors.slice(0, 3).forEach(error => {
-            message += `• ${error.server.emoji} ${error.server.city}: ${error.status}\n`;
+        message += `\n<b>🚨 Critical Issues:</b>\n`;
+        criticalErrors.slice(0, 5).forEach(error => {
+            const statusMsg = getStatusMsg(error.code, error.isRedirect);
+            message += `• ${error.server.emoji} ${error.server.city}: ${statusMsg} (${error.code})\n`;
         });
-        if (criticalErrors.length > 3) {
-            message += `• ...and ${criticalErrors.length - 3} more\n`;
+        if (criticalErrors.length > 5) {
+            message += `• ...and ${criticalErrors.length - 5} more\n`;
         }
     }
     
-    // Check-Host link
-    const checkUrl = `https://check-host.net/check-http?host=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}`;
-    message += `\n<b>🔗 Full Report:</b> <a href="${checkUrl}">Check-Host.net</a>`;
+    // Redirect analysis
+    const redirectResults = results.filter(r => r.isRedirect || (r.code >= 300 && r.code < 400));
+    if (redirectResults.length > 0) {
+        message += `\n<b>🔄 Redirect Analysis:</b>\n`;
+        redirectResults.slice(0, 3).forEach(redirect => {
+            message += `• ${redirect.server.emoji} ${redirect.server.city}: ${redirect.redirectCount} redirect(s)\n`;
+        });
+    }
     
     // Response time analysis
     const successfulTimes = results.filter(r => r.code >= 200 && r.code < 300).map(r => r.time);
@@ -248,48 +304,26 @@ function formatResultsHTML(data) {
         const avgTime = Math.round(successfulTimes.reduce((a, b) => a + b, 0) / successfulTimes.length);
         const minTime = Math.min(...successfulTimes);
         const maxTime = Math.max(...successfulTimes);
-        message += `\n<b>⏱️ Response Time:</b> Avg: ${avgTime}ms | Min: ${minTime}ms | Max: ${maxTime}ms`;
+        message += `\n<b>⏱️ Response Time:</b>\n`;
+        message += `• Average: <b>${avgTime}ms</b>\n`;
+        message += `• Fastest: <b>${minTime}ms</b>\n`;
+        message += `• Slowest: <b>${maxTime}ms</b>\n`;
     }
+    
+    // Check-Host link
+    const checkUrl = `https://check-host.net/check-http?host=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}`;
+    message += `\n<b>🔗 Full Report:</b> <a href="${checkUrl}">Check-Host.net</a>`;
     
     return message;
 }
 
-// Store data untuk bot check host
+// Store data
 const userData = new Map();
 
-// ==================== REGISTER COMMANDS DARI FILE LAIN ====================
+// ==================== BOT COMMANDS ====================
 
-// Object untuk menyimpan semua commands
-const commands = {};
-
-// Load help.js
-try {
-    const helpModule = require('./help.js');
-    commands['help'] = helpModule;
-    console.log('✅ Loaded help.js');
-} catch (error) {
-    console.error('❌ Failed to load help.js:', error.message);
-}
-
-// Load start.js
-try {
-    const startModule = require('./start.js');
-    commands['start'] = startModule;
-    console.log('✅ Loaded start.js');
-} catch (error) {
-    console.error('❌ Failed to load start.js:', error.message);
-}
-
-// ==================== COMMANDS BOT CHECK HOST ====================
-
-// /start command (override dari start.js jika ada)
+// /start command
 bot.command('start', (ctx) => {
-    // Cek apakah ada start.js module
-    if (commands['start']) {
-        return commands['start'].execute(bot, ctx.message);
-    }
-    
-    // Default start command dari bot check host
     const msg = 
         `<b>🚀 HTTP Check Bot</b>\n\n` +
         `<b>Fast Website Checker from ${SERVERS.length} Locations</b>\n\n` +
@@ -301,8 +335,10 @@ bot.command('start', (ctx) => {
         `<code>/http google.com</code>\n` +
         `<code>/http https://github.com</code>\n\n` +
         `<b>Features:</b>\n` +
-        `• Fast checking (3-5 seconds)\n` +
-        `• Error detection (502, 503, 504, 508, 599)\n` +
+        `• Check from ${SERVERS.length} global locations\n` +
+        `• Detect all HTTP status codes (200, 301, 302, 404, 500, etc.)\n` +
+        `• Network error detection (Timeout, Broken Pipe, DNS Error)\n` +
+        `• SSL certificate checking\n` +
         `• Redirect tracking\n` +
         `• Response time analysis`;
     
@@ -312,81 +348,39 @@ bot.command('start', (ctx) => {
     });
 });
 
-// /help command (override dari help.js jika ada)
+// /help command
 bot.command('help', async (ctx) => {
-    // Cek apakah ada help.js module
-    if (commands['help']) {
-        return commands['help'].execute(bot, ctx.message);
-    }
+    const helpMsg = 
+        `<b>📖 HTTP Check Bot Help</b>\n\n` +
+        `<b>Available Commands:</b>\n` +
+        `<code>/start</code> - Start the bot\n` +
+        `<code>/help</code> - Show this help message\n` +
+        `<code>/http &lt;url&gt;</code> - Full website check\n` +
+        `<code>/ping &lt;url&gt;</code> - Quick ping test\n\n` +
+        `<b>Supported URL Formats:</b>\n` +
+        `• google.com\n` +
+        `• www.example.com\n` +
+        `• https://github.com\n` +
+        `• http://example.com\n\n` +
+        `<b>Detected Errors:</b>\n` +
+        `✅ HTTP 200-299: Success\n` +
+        `↪️ HTTP 300-399: Redirect (301, 302, etc.)\n` +
+        `⚠️ HTTP 400-499: Client Error (404, 403, etc.)\n` +
+        `❌ HTTP 500-599: Server Error\n` +
+        `🚨 Network: Timeout, Broken Pipe, DNS Error\n` +
+        `🔐 SSL: Certificate errors\n\n` +
+        `<b>Response Time Indicators:</b>\n` +
+        `🟢 0-500ms: Excellent\n` +
+        `🟡 500-2000ms: Good\n` +
+        `🔴 2000ms+: Slow`;
     
-    // Default help command dari bot check host
-    const chatId = ctx.chat.id;
-    const userId = ctx.from.id;
-
-    const helpMsg = `
-*PANDUAN SISTEM HTTP CHECK BOT*
----------------------------------------
-*Daftar Perintah Tersedia:*
-
-1. /start
-Memulai bot dan menampilkan informasi awal
-
-2. /help
-Menampilkan panduan penggunaan sistem ini
-
-3. /http <url>
-Melakukan pengecekan status website dari ${SERVERS.length} lokasi server
-Contoh: /http google.com
-
-4. /ping <url>
-Melakukan uji latensi cepat dari 3 server terdekat
-Contoh: /ping example.com
-
-*Prosedur Penggunaan:*
-- Kirimkan salah satu perintah di atas melalui kolom pesan
-- Sistem akan memproses permintaan secara otomatis dalam 3-5 detik
-- Pastikan URL yang dimasukkan dalam format yang benar
-
-*Fitur Utama:*
-- Pengecekan dari 20 lokasi server global
-- Deteksi error lengkap (502, 503, 504, 508, 599)
-- Pelacakan redirect otomatis
-- Analisis waktu respon
-- Laporan statistik lengkap
----------------------------------------
-*ID PENGGUNA:* \`${userId}\`
-*STATUS:* \`SYSTEM_READY\`
-    `.trim();
-
-    try {
-        ctx.sendChatAction('typing');
-        
-        await ctx.reply(helpMsg, {
-            parse_mode: 'Markdown',
-            reply_to_message_id: ctx.message.message_id,
-            disable_web_page_preview: true,
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '📋 Contoh /http', callback_data: 'help_example_http' },
-                        { text: '🏓 Contoh /ping', callback_data: 'help_example_ping' }
-                    ],
-                    [
-                        { text: '🌐 Check-Host.net', url: 'https://check-host.net' }
-                    ]
-                ]
-            }
-        });
-
-        console.log(`[LOG] /help executed for ID: ${userId}`);
-    } catch (error) {
-        console.error(`[ERROR] /help failed: ${error.message}`);
-        
-        await ctx.reply("Terjadi kesalahan teknis saat memuat panduan sistem.");
-    }
+    ctx.reply(helpMsg, { 
+        parse_mode: 'HTML',
+        disable_web_page_preview: true 
+    });
 });
 
-// /ping command untuk quick test
+// /ping command
 bot.command('ping', async (ctx) => {
     try {
         const args = ctx.message.text.split(' ');
@@ -406,8 +400,8 @@ bot.command('ping', async (ctx) => {
             { parse_mode: 'HTML' }
         );
         
-        // Cek hanya dari 3 server terdekat
-        const quickServers = SERVERS.slice(0, 3);
+        // Check from 4 servers
+        const quickServers = [SERVERS[8], SERVERS[0], SERVERS[3], SERVERS[14]]; // SG, US, DE, ID
         const results = [];
         
         for (const server of quickServers) {
@@ -419,19 +413,21 @@ bot.command('ping', async (ctx) => {
             }
         }
         
-        // Format hasil
+        // Format results
         let message = `<b>🏓 Ping Results</b>\n<code>${escapeHtml(url)}</code>\n\n`;
         
         results.forEach(result => {
             const icon = result.code >= 200 && result.code < 300 ? '✅' : '❌';
-            message += `${icon} ${result.server.emoji} ${result.server.city}: ${result.code} - ${result.time}ms\n`;
+            const statusMsg = getStatusMsg(result.code, result.isRedirect);
+            message += `${icon} ${result.server.emoji} ${result.server.city}: ${result.code} - ${result.time}ms (${statusMsg})\n`;
         });
         
-        const avgTime = results.length > 0 
-            ? Math.round(results.reduce((sum, r) => sum + r.time, 0) / results.length)
+        const successfulTimes = results.filter(r => r.code >= 200 && r.code < 300).map(r => r.time);
+        const avgTime = successfulTimes.length > 0 
+            ? Math.round(successfulTimes.reduce((sum, r) => sum + r.time, 0) / successfulTimes.length)
             : 0;
         
-        message += `\n<b>📊 Average:</b> ${avgTime}ms`;
+        message += `\n<b>📊 Average Response:</b> ${avgTime}ms`;
         
         await ctx.telegram.editMessageText(
             ctx.chat.id,
@@ -446,10 +442,9 @@ bot.command('ping', async (ctx) => {
     }
 });
 
-// /http command yang lebih cepat
+// /http command - main function
 bot.command('http', async (ctx) => {
     try {
-        // Get URL from message
         const args = ctx.message.text.split(' ');
         
         if (args.length < 2) {
@@ -479,7 +474,7 @@ bot.command('http', async (ctx) => {
         const results = [];
         const promises = [];
         
-        // Gunakan Promise.all untuk lebih cepat
+        // Check all servers
         for (const server of SERVERS) {
             promises.push(
                 (async () => {
@@ -498,10 +493,10 @@ bot.command('http', async (ctx) => {
                 })()
             );
             
-            // Batasi concurrent requests
+            // Limit concurrent requests
             if (promises.length >= 5) {
                 await Promise.all(promises);
-                promises.length = 0; // Reset array
+                promises.length = 0;
                 
                 // Update progress
                 const progress = Math.round((results.length / SERVERS.length) * 100);
@@ -521,12 +516,12 @@ bot.command('http', async (ctx) => {
             }
         }
         
-        // Tunggu sisa promises
+        // Wait for remaining promises
         if (promises.length > 0) {
             await Promise.all(promises);
         }
         
-        // Siapkan data
+        // Prepare data
         const data = {
             url: url,
             results: results
@@ -552,7 +547,7 @@ bot.command('http', async (ctx) => {
             ]
         ]);
         
-        // Update message dengan hasil
+        // Update message with results
         await ctx.telegram.editMessageText(
             ctx.chat.id,
             loadingMsg.message_id,
@@ -565,48 +560,23 @@ bot.command('http', async (ctx) => {
             }
         );
         
-        console.log(`✅ Check completed in ${Date.now() - loadingMsg.date * 1000}ms: ${url}`);
+        console.log(`✅ Check completed: ${url}`);
         
     } catch (error) {
         console.error('HTTP command error:', error);
         
-        try {
-            await ctx.reply(
-                `<b>❌ Check Failed!</b>\n\n` +
-                `<b>Error:</b> ${escapeHtml(error.message)}\n\n` +
-                `<b>Possible issues:</b>\n` +
-                `1. Invalid URL format\n` +
-                `2. Website is down\n` +
-                `3. Connection blocked\n\n` +
-                `<b>Try:</b> <code>/http example.com</code>`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {
-            ctx.reply('❌ Failed to check. Please try again.');
-        }
+        await ctx.reply(
+            `<b>❌ Check Failed!</b>\n\n` +
+            `<b>Error:</b> ${escapeHtml(error.message)}\n\n` +
+            `<b>Try:</b> <code>/http example.com</code>`,
+            { parse_mode: 'HTML' }
+        );
     }
 });
 
 // ==================== BUTTON HANDLERS ====================
 
-// Handler untuk contoh help
-bot.action('help_example_http', async (ctx) => {
-    await ctx.answerCbQuery('Contoh: /http google.com');
-    await ctx.reply(
-        'Contoh penggunaan:\n`/http google.com`\n`/http https://github.com`\n`/http example.com`',
-        { parse_mode: 'Markdown' }
-    );
-});
-
-bot.action('help_example_ping', async (ctx) => {
-    await ctx.answerCbQuery('Contoh: /ping example.com');
-    await ctx.reply(
-        'Contoh penggunaan:\n`/ping google.com`\n`/ping example.com`',
-        { parse_mode: 'Markdown' }
-    );
-});
-
-// Copy button handler
+// Copy button
 bot.action(/copy_(.+)/, async (ctx) => {
     try {
         const dataId = ctx.match[1];
@@ -616,18 +586,14 @@ bot.action(/copy_(.+)/, async (ctx) => {
             return ctx.answerCbQuery('❌ Data expired');
         }
         
-        // Konversi ke plain text
+        // Convert to plain text
         const plainText = htmlText
             .replace(/<[^>]*>/g, '')
             .replace(/&amp;/g, '&')
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
-            .replace(/&#039;/g, "'")
-            .replace(/✅/g, '[OK]')
-            .replace(/❌/g, '[FAIL]')
-            .replace(/⚠️/g, '[WARN]')
-            .replace(/↪️/g, '[REDIRECT]');
+            .replace(/&#039;/g, "'");
         
         await ctx.reply(
             `<b>📋 Results Copied</b>\n\n<pre><code>${escapeHtml(plainText.substring(0, 2000))}</code></pre>`,
@@ -640,7 +606,6 @@ bot.action(/copy_(.+)/, async (ctx) => {
         await ctx.answerCbQuery('✅ Copied to chat!');
         
     } catch (error) {
-        console.error('Copy error:', error);
         ctx.answerCbQuery('❌ Copy failed');
     }
 });
@@ -657,13 +622,11 @@ bot.action(/recheck_(.+)/, async (ctx) => {
             { parse_mode: 'HTML' }
         );
         
-        // Simulasikan command
+        // Simulate command
         ctx.message = { text: `/http ${url}` };
-        ctx.from = ctx.from;
         return bot.command('http')(ctx);
         
     } catch (error) {
-        console.error('Recheck error:', error);
         ctx.answerCbQuery('❌ Error');
     }
 });
@@ -680,7 +643,7 @@ bot.action(/quick_(.+)/, async (ctx) => {
             { parse_mode: 'HTML' }
         );
         
-        // Simulasikan command ping
+        // Simulate command
         ctx.message = { text: `/ping ${url}` };
         return bot.command('ping')(ctx);
         
@@ -689,60 +652,68 @@ bot.action(/quick_(.+)/, async (ctx) => {
     }
 });
 
-// ==================== REGISTER COMMANDS DARI MODULE ====================
+// ==================== VERCEl SERVERLESS CONFIG ====================
 
-// Register commands dari module lain
-function registerCommands() {
-    Object.entries(commands).forEach(([name, module]) => {
-        if (name !== 'start' && name !== 'help') { // start & help sudah dihandle
-            if (module.command && module.execute) {
-                bot.command(module.command, (ctx) => {
-                    module.execute(bot, ctx.message);
-                });
-                console.log(`✅ Registered /${module.command}`);
-            }
-        }
+// Health check endpoint
+app.get('/', (req, res) => {
+    res.json({
+        status: 'Bot is running',
+        service: 'Telegram HTTP Check Bot',
+        version: '1.0.0',
+        servers: SERVERS.length,
+        timestamp: new Date().toISOString(),
+        endpoints: ['/webhook', '/status']
     });
-}
+});
 
-// ==================== ERROR HANDLING ====================
+// Status endpoint
+app.get('/status', (req, res) => {
+    res.json({
+        status: 'online',
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        node_version: process.version,
+        servers_count: SERVERS.length
+    });
+});
 
-// Error handler
-bot.catch((err, ctx) => {
-    console.error('Bot error:', err.message);
+// Webhook endpoint for Vercel
+app.post('/webhook', async (req, res) => {
     try {
-        ctx.reply('❌ Bot error occurred. Please try again.');
-    } catch (e) {
-        // Ignore
+        await bot.handleUpdate(req.body);
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error('Webhook error:', error);
+        res.status(500).send('Error');
     }
+});
+
+// Handle all other routes
+app.all('*', (req, res) => {
+    res.status(404).json({ error: 'Not found' });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Internal server error' });
 });
 
 // ==================== START BOT ====================
 
-console.log('🚀 Starting HTTP Check Bot...');
-console.log(`🌍 Total servers: ${SERVERS.length}`);
-
-// Register commands dari module
-registerCommands();
-
-bot.launch().then(() => {
-    console.log('✅ Bot is running!');
-    console.log('📱 Commands:');
-    console.log('   /start - Start bot');
-    console.log('   /help  - Show help');
-    console.log('   /http  - Check website');
-    console.log('   /ping  - Quick ping test');
-    
-    // Tampilkan commands dari module lain
-    Object.entries(commands).forEach(([name, module]) => {
-        if (module.command && module.description) {
-            console.log(`   /${module.command} - ${module.description}`);
-        }
+// Start bot in polling mode (for development)
+if (process.env.NODE_ENV !== 'production') {
+    bot.launch().then(() => {
+        console.log(`✅ Bot is running in development mode!`);
+        console.log(`📱 Servers: ${SERVERS.length}`);
+        console.log(`🌐 Commands: /start /help /http /ping`);
+    }).catch(err => {
+        console.error('❌ Failed to start:', err);
     });
-    
-}).catch(err => {
-    console.error('❌ Failed to start:', err);
-});
+}
+
+// Export for Vercel serverless
+module.exports = app;
 
 // Graceful shutdown
 process.once('SIGINT', () => {
@@ -756,25 +727,3 @@ process.once('SIGTERM', () => {
     bot.stop('SIGTERM');
     process.exit(0);
 });
-
-// Auto-restart jika error
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-    setTimeout(() => process.exit(1), 1000);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-// Export untuk kebutuhan testing
-module.exports = {
-    bot,
-    commands,
-    SERVERS,
-    checkServer,
-    formatResultsHTML,
-    escapeHtml,
-    formatUrl,
-    getStatusMsg
-};
